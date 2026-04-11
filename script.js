@@ -7,7 +7,7 @@
 
 // ── CONFIG ────────────────────────────────────────
 const CONFIG = {
-  FREE_CHAR_LIMIT: 500,
+  FREE_CHAR_LIMIT: 50,
   API_ENDPOINT: '/api/tts',
   YANKITR_BASE: 'https://yankitr.com',
   UTM: { source: 'metinseslendirme', medium: 'satellite' },

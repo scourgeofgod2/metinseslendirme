@@ -14,7 +14,7 @@ const PORT = process.env.PORT || 3000;
 // ── CONFIG ────────────────────────────────────────
 const FISH_API_KEY = process.env.FISH_API_KEY;
 const FISH_API_URL = 'https://api.fish.audio/v1/tts';
-const MAX_CHARS    = 500;
+const MAX_CHARS    = 50;
 
 if (!FISH_API_KEY) {
   console.error('[ERROR] FISH_API_KEY is not set. Check your .env file.');
