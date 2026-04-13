@@ -369,10 +369,41 @@ section:last-of-type {
   margin-bottom: 16px;
 }
 
+.controls-row--single {
+  grid-template-columns: 1fr;
+  max-width: 50%;
+}
+
 @media (max-width: 560px) {
   .controls-row {
     grid-template-columns: 1fr;
   }
+  .controls-row--single {
+    max-width: 100%;
+  }
+}
+
+/* Text input control (voice-id) */
+.control-input {
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--bg);
+  border: var(--border-w) solid var(--border-strong);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  padding: 9px 12px;
+  outline: none;
+  width: 100%;
+  transition: border-color 0.15s;
+}
+
+.control-input::placeholder {
+  color: var(--text-muted);
+}
+
+.control-input:focus {
+  border-color: var(--accent);
 }
 
 .control-group {
@@ -609,6 +640,29 @@ input[type="range"]::-moz-range-thumb {
   color: var(--accent);
   text-transform: uppercase;
   letter-spacing: 0.6px;
+}
+
+/* Audio Player */
+.audio-player-wrap {
+  display: none;
+  margin-top: 14px;
+  border: var(--border-w) solid var(--border-strong);
+  background: var(--bg);
+  padding: 10px 14px;
+}
+
+.audio-player-wrap.active {
+  display: block;
+}
+
+.audio-player-wrap audio {
+  width: 100%;
+  height: 36px;
+  outline: none;
+  display: block;
+  accent-color: var(--accent);
+  /* Minimal cross-browser dark styling */
+  filter: invert(1) hue-rotate(180deg) brightness(0.85);
 }
 
 /* =============================================

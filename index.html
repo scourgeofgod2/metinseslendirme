@@ -228,12 +228,11 @@
             </div>
 
             <!-- Limit Banner -->
-            <div class="limit-banner" id="limit-banner" role="alert" id="limit-info" aria-live="assertive">
+            <div class="limit-banner" id="limit-banner" role="alert" aria-live="assertive">
               <span class="limit-banner__icon" aria-hidden="true">⚠</span>
               <div class="limit-banner__text">
-                <strong>50 karakter sınırına ulaştın.</strong>
-                Sadece ilk 50 karakter seslendirilir.
-                Uzun metinler için Yankı'da <strong>1.000 ücretsiz kredi</strong> seni bekliyor.
+                <strong>500 karakter sınırına ulaştın.</strong>
+                Daha uzun metinler için Yankı'da <strong>1.000 ücretsiz kredi</strong> seni bekliyor.
                 <br />
                 <a
                   href="https://yankitr.com/?utm_source=metinseslendirme&utm_medium=satellite&utm_campaign=char-limit-banner"
@@ -247,14 +246,44 @@
               </div>
             </div>
 
-            <!-- Controls -->
+            <!-- Controls Row 1: Voice ID + Stability -->
             <div class="controls-row">
               <div class="control-group">
-                <label class="control-label" for="voice-select">Ses Seç</label>
-                <select id="voice-select" class="control-select" aria-label="Ses seçimi">
-                  <option value="">Sesler yükleniyor…</option>
-                </select>
+                <label class="control-label" for="voice-id-input">Voice ID</label>
+                <input
+                  type="text"
+                  id="voice-id-input"
+                  class="control-input"
+                  placeholder="Boş bırakılabilir…"
+                  autocomplete="off"
+                  spellcheck="false"
+                  aria-label="Ses kimliği (voice ID)"
+                />
               </div>
+              <div class="control-group">
+                <label class="control-label" for="stability-slider">
+                  Kararlılık — <span id="stability-val">0.50</span>
+                </label>
+                <div class="speed-row">
+                  <input
+                    type="range"
+                    id="stability-slider"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value="0.5"
+                    aria-label="Ses kararlılığı"
+                    aria-valuemin="0"
+                    aria-valuemax="1"
+                    aria-valuenow="0.5"
+                  />
+                  <span class="speed-label-val" aria-hidden="true" id="stability-val-display">0.50</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Controls Row 2: Speed -->
+            <div class="controls-row controls-row--single">
               <div class="control-group">
                 <label class="control-label" for="speed-slider">
                   Hız — <span id="speed-val">1.0x</span>
@@ -263,13 +292,13 @@
                   <input
                     type="range"
                     id="speed-slider"
-                    min="0.5"
-                    max="2"
-                    step="0.1"
+                    min="0.7"
+                    max="1.2"
+                    step="0.05"
                     value="1"
                     aria-label="Konuşma hızı"
-                    aria-valuemin="0.5"
-                    aria-valuemax="2"
+                    aria-valuemin="0.7"
+                    aria-valuemax="1.2"
                     aria-valuenow="1"
                   />
                   <span class="speed-label-val" aria-hidden="true" id="speed-val-display">1.0x</span>
@@ -290,7 +319,8 @@
               <button
                 id="btn-download"
                 class="btn btn--ghost"
-                aria-label="Ses dosyasını indir — Yankı gerekli"
+                disabled
+                aria-label="MP3 dosyasını indir"
               >
                 <span class="btn__icon" aria-hidden="true">↓</span>
                 MP3 İndir
@@ -301,7 +331,12 @@
               </button>
             </div>
 
-            <!-- Playing Bar -->
+            <!-- Audio Player (shown after TTS completes) -->
+            <div class="audio-player-wrap" id="audio-player-wrap" role="region" aria-label="Ses oynatıcı">
+              <audio id="tts-audio" controls preload="none" aria-label="Seslendirme çıktısı"></audio>
+            </div>
+
+            <!-- Status / Playing Bar -->
             <div class="playing-bar" id="playing-bar" role="status" aria-live="polite">
               <div class="playing-bar__waves" aria-hidden="true">
                 <span></span>
@@ -310,7 +345,7 @@
                 <span></span>
                 <span></span>
               </div>
-              <span class="playing-bar__text">Seslendiriliyor…</span>
+              <span class="playing-bar__text" id="playing-bar-text">Seslendiriliyor…</span>
             </div>
 
           </div><!-- /.tool-card__body -->

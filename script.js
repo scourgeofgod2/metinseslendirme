@@ -1,96 +1,58 @@
 /* =============================================
-   metinseslendirme.com — Fish Audio TTS Client
-   Server-side proxy üzerinden çalışır
+   metinseslendirme.com — CortexAI TTS Client
+   Asenkron polling (PROCESSING → FINISHED/FAILED)
    ============================================= */
 
 'use strict';
 
 // ── CONFIG ────────────────────────────────────────
 const CONFIG = {
-  FREE_CHAR_LIMIT: 50,
-  API_ENDPOINT: '/api/tts',
-  YANKITR_BASE: 'https://yankitr.com',
+  FREE_CHAR_LIMIT:  500,
+  SUBMIT_ENDPOINT:  '/api/tts',
+  POLL_ENDPOINT:    '/api/tts/poll',
+  PROXY_ENDPOINT:   '/api/audio-proxy',
+  POLL_INTERVAL_MS: 2000,   // her 2 sn'de bir sorgula
+  POLL_MAX_TRIES:   60,     // max 120 sn bekle
+  YANKITR_BASE:     'https://yankitr.com',
   UTM: { source: 'metinseslendirme', medium: 'satellite' },
 };
-
-// Fish Audio voice ID listesi
-// fish.audio/models adresinden kendi ses ID'lerinizi alın
-const VOICES = [
-  // Türkçe
-  { id: 'ecab76491d6748fe9c0f4afd18ae1a3d', label: 'Türkçe — Erkek (Belgesel)',  lang: 'tr' },
-  { id: '8707d68d85e14e73a8665c0228428f3d', label: 'Türkçe — Erkek Reklamcı',   lang: 'tr' },
-  // İngilizce
-  { id: '4b8c894566fa446abe1f024a1225936c', label: 'Türkçe — Kadın (Haber)', lang: 'tr' },
-  { id: 'f61dc43fb490483386cfe94293eec64e', label: 'Türkçe — Kadın (Çekici)', lang: 'tr' },
-  // İspanyolca
-  
-];
 
 // ── UTM URL BUILDER ───────────────────────────────
 function buildUTMUrl(campaign = 'tts-tool') {
   const url = new URL(CONFIG.YANKITR_BASE);
-  url.searchParams.set('utm_source', CONFIG.UTM.source);
-  url.searchParams.set('utm_medium', CONFIG.UTM.medium);
+  url.searchParams.set('utm_source',   CONFIG.UTM.source);
+  url.searchParams.set('utm_medium',   CONFIG.UTM.medium);
   url.searchParams.set('utm_campaign', campaign);
   return url.toString();
 }
 
 // ── DOM REFS ──────────────────────────────────────
-const textarea      = document.getElementById('tts-input');
-const charNum       = document.getElementById('char-num');
-const charMax       = document.getElementById('char-max');
-const limitBanner   = document.getElementById('limit-banner');
-const voiceSelect   = document.getElementById('voice-select');
-const speedSlider   = document.getElementById('speed-slider');
-const speedVal      = document.getElementById('speed-val');
-const playBtn       = document.getElementById('btn-play');
-const stopBtn       = document.getElementById('btn-stop');
-const downloadBtn   = document.getElementById('btn-download');
-const clearBtn      = document.getElementById('btn-clear');
-const playingBar    = document.getElementById('playing-bar');
-const modalOverlay  = document.getElementById('modal-overlay');
-const modalClose    = document.getElementById('modal-close');
+const textarea        = document.getElementById('tts-input');
+const charNum         = document.getElementById('char-num');
+const charMax         = document.getElementById('char-max');
+const limitBanner     = document.getElementById('limit-banner');
+const voiceIdInput    = document.getElementById('voice-id-input');
+const stabilitySlider = document.getElementById('stability-slider');
+const stabilityVal    = document.getElementById('stability-val');
+const speedSlider     = document.getElementById('speed-slider');
+const speedVal        = document.getElementById('speed-val');
+const playBtn         = document.getElementById('btn-play');
+const stopBtn         = document.getElementById('btn-stop');
+const downloadBtn     = document.getElementById('btn-download');
+const clearBtn        = document.getElementById('btn-clear');
+const audioPlayerWrap = document.getElementById('audio-player-wrap');
+const audioEl         = document.getElementById('tts-audio');
+const playingBar      = document.getElementById('playing-bar');
+const playingBarText  = document.getElementById('playing-bar-text');
+const modalOverlay    = document.getElementById('modal-overlay');
+const modalClose      = document.getElementById('modal-close');
 
 // ── STATE ─────────────────────────────────────────
-let audioEl      = null;   // current HTMLAudioElement
-let audioBlobUrl = null;   // current object URL (for download)
-let isPlaying    = false;
-
-// ── VOICE SELECT INIT ─────────────────────────────
-function initVoiceSelect() {
-  voiceSelect.innerHTML = '';
-
-  const groups = [
-    { lang: 'tr', label: '🇹🇷 Türkçe' },
-    { lang: 'en', label: '🇺🇸 İngilizce' },
-    { lang: 'es', label: '🇪🇸 İspanyolca' },
-  ];
-
-  groups.forEach(({ lang, label }) => {
-    const langVoices = VOICES.filter(v => v.lang === lang);
-    if (langVoices.length === 0) return;
-    const group = document.createElement('optgroup');
-    group.label = label;
-    langVoices.forEach(v => {
-      const opt = document.createElement('option');
-      opt.value = v.id;
-      opt.textContent = v.label;
-      group.appendChild(opt);
-    });
-    voiceSelect.appendChild(group);
-  });
-
-  // Premium upsell option
-  const premGroup = document.createElement('optgroup');
-  premGroup.label = '✦ 130+ Premium Ses → yankitr.com';
-  const premOpt = document.createElement('option');
-  premOpt.value = '__premium__';
-  premOpt.textContent = '→ Yankı\'da tüm premium sesleri keşfet';
-  premGroup.appendChild(premOpt);
-  voiceSelect.appendChild(premGroup);
-}
-
-initVoiceSelect();
+let pollTimer      = null;   // setInterval handle
+let pollTries      = 0;
+let currentTaskId  = null;
+let currentBlobUrl = null;   // object URL used for download
+let isProcessing   = false;
 
 // ── CHAR COUNTER ──────────────────────────────────
 function updateCharCount() {
@@ -112,128 +74,182 @@ function updateCharCount() {
 }
 
 textarea.addEventListener('input', updateCharCount);
+textarea.addEventListener('paste', () => setTimeout(updateCharCount, 50));
 
-// ── SPEAK ─────────────────────────────────────────
+// ── SLIDER LABELS ─────────────────────────────────
+stabilitySlider.addEventListener('input', () => {
+  const v = parseFloat(stabilitySlider.value).toFixed(2);
+  stabilityVal.textContent = v;
+  document.getElementById('stability-val-display').textContent = v;
+});
+
+speedSlider.addEventListener('input', () => {
+  const v = parseFloat(speedSlider.value).toFixed(1);
+  speedVal.textContent = v + 'x';
+  document.getElementById('speed-val-display').textContent = v + 'x';
+});
+
+// ── MAIN SPEAK FLOW ───────────────────────────────
 async function speak() {
   const rawText = textarea.value.trim();
+  if (!rawText)                              { flashTextarea(); return; }
+  if (rawText.length > CONFIG.FREE_CHAR_LIMIT) { openModal('limit-reached'); return; }
 
-  if (!rawText) {
-    flashTextarea();
-    return;
-  }
-
-  if (voiceSelect.value === '__premium__') {
-    openModal('premium-voice');
-    return;
-  }
-
-  if (rawText.length > CONFIG.FREE_CHAR_LIMIT) {
-    openModal('limit-reached');
-    return;
-  }
-
-  // Stop any active audio
-  stopAudio();
-
-  setLoadingState(true);
+  abortPoll();
+  resetAudio();
+  setLoadingState(true, 'Hazırlanıyor…');
 
   try {
-    const res = await fetch(CONFIG.API_ENDPOINT, {
-      method: 'POST',
+    // 1. Submit job
+    const submitRes = await fetch(CONFIG.SUBMIT_ENDPOINT, {
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        text: rawText,
-        voice_id: voiceSelect.value,
+        text:      rawText,
+        voice_id:  voiceIdInput.value.trim(),
+        stability: parseFloat(stabilitySlider.value),
+        speed:     parseFloat(speedSlider.value),
       }),
     });
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: 'Bilinmeyen hata.' }));
-      throw new Error(err.error || `HTTP ${res.status}`);
+    if (!submitRes.ok) {
+      const err = await submitRes.json().catch(() => ({ error: 'Bilinmeyen hata.' }));
+      throw new Error(err.error || `HTTP ${submitRes.status}`);
     }
 
-    const blob = await res.blob();
+    const { taskId } = await submitRes.json();
+    if (!taskId) throw new Error('Görev ID alınamadı.');
 
-    // Revoke previous object URL
-    if (audioBlobUrl) {
-      URL.revokeObjectURL(audioBlobUrl);
-      audioBlobUrl = null;
-    }
-
-    audioBlobUrl = URL.createObjectURL(blob);
-    audioEl = new Audio(audioBlobUrl);
-
-    // Apply speed
-    audioEl.playbackRate = parseFloat(speedSlider.value);
-
-    audioEl.addEventListener('play',  () => setPlayingState(true));
-    audioEl.addEventListener('ended', () => setPlayingState(false));
-    audioEl.addEventListener('error', () => {
-      setPlayingState(false);
-      showError('Ses oynatılamadı. Lütfen tekrar deneyin.');
-    });
-
-    setLoadingState(false);
-    audioEl.play();
+    currentTaskId = taskId;
+    setLoadingState(true, 'İşleniyor…');
+    startPolling(taskId);
 
   } catch (err) {
     setLoadingState(false);
     showError(err.message || 'Seslendirme başarısız. Lütfen tekrar deneyin.');
-    console.error('[TTS Error]', err);
+    console.error('[TTS Submit Error]', err);
+  }
+}
+
+// ── POLLING ───────────────────────────────────────
+function startPolling(taskId) {
+  pollTries = 0;
+  isProcessing = true;
+
+  pollTimer = setInterval(async () => {
+    if (!isProcessing) { clearInterval(pollTimer); return; }
+    pollTries++;
+
+    if (pollTries > CONFIG.POLL_MAX_TRIES) {
+      abortPoll();
+      setLoadingState(false);
+      showError('Seslendirme zaman aşımına uğradı. Lütfen tekrar deneyin.');
+      return;
+    }
+
+    try {
+      const res = await fetch(`${CONFIG.POLL_ENDPOINT}/${encodeURIComponent(taskId)}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(err.error);
+      }
+
+      const data = await res.json();
+
+      if (data.status === 'FINISHED') {
+        abortPoll();
+        await handleAudioReady(data.audioUrl);
+
+      } else if (data.status === 'FAILED') {
+        abortPoll();
+        setLoadingState(false);
+        showError(data.error || 'Seslendirme başarısız oldu.');
+
+      }
+      // PROCESSING → continue polling
+
+    } catch (err) {
+      // Network hatalarında polling'i durdurmuyoruz, denemeye devam et
+      console.warn('[Poll attempt error]', err);
+    }
+  }, CONFIG.POLL_INTERVAL_MS);
+}
+
+function abortPoll() {
+  isProcessing = false;
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+  currentTaskId = null;
+}
+
+// ── AUDIO READY ───────────────────────────────────
+async function handleAudioReady(audioUrl) {
+  try {
+    // Proxy üzerinden çek (CORS + auth güvenliği)
+    const proxyUrl = `${CONFIG.PROXY_ENDPOINT}?url=${encodeURIComponent(audioUrl)}`;
+    const audioRes = await fetch(proxyUrl);
+
+    if (!audioRes.ok) throw new Error(`Ses indirilemedi (HTTP ${audioRes.status})`);
+
+    const blob = await audioRes.blob();
+
+    // Önceki blob URL'ini temizle
+    if (currentBlobUrl) {
+      URL.revokeObjectURL(currentBlobUrl);
+    }
+    currentBlobUrl = URL.createObjectURL(blob);
+
+    // Oynatıcıyı güncelle
+    audioEl.src = currentBlobUrl;
+    audioPlayerWrap.classList.add('active');
+
+    setLoadingState(false);
+    downloadBtn.disabled = false;
+
+    // Oynatmaya başla — autoplay bloklanırsa native <audio controls> görünür, kullanıcı tıklayabilir.
+    // setPlayingState(true) play event listener tarafından tetiklenecek.
+    audioEl.play().catch(() => {
+      // Tarayıcı autoplay politikası engelledi — sessizce geç, native player gösterildi.
+    });
+
+  } catch (err) {
+    setLoadingState(false);
+    showError(err.message || 'Ses yüklenemedi.');
+    console.error('[Audio Ready Error]', err);
   }
 }
 
 // ── STOP ──────────────────────────────────────────
-function stopAudio() {
-  if (audioEl) {
-    audioEl.pause();
-    audioEl.currentTime = 0;
-    audioEl = null;
-  }
+function stopAll() {
+  abortPoll();
+  audioEl.pause();
+  audioEl.currentTime = 0;
   setPlayingState(false);
+  setLoadingState(false);
+}
+
+// ── RESET AUDIO ───────────────────────────────────
+function resetAudio() {
+  audioEl.pause();
+  // removeAttribute + load() is the safe cross-browser way to clear audio.
+  // Setting src='' resolves to the page URL in browsers and fires an error event.
+  audioEl.removeAttribute('src');
+  audioEl.load();
+  audioPlayerWrap.classList.remove('active');
+  downloadBtn.disabled = true;
+  if (currentBlobUrl) {
+    URL.revokeObjectURL(currentBlobUrl);
+    currentBlobUrl = null;
+  }
 }
 
 // ── DOWNLOAD ──────────────────────────────────────
-async function downloadAudio() {
-  const rawText = textarea.value.trim();
-
-  if (!rawText) { flashTextarea(); return; }
-  if (voiceSelect.value === '__premium__') { openModal('premium-voice'); return; }
-  if (rawText.length > CONFIG.FREE_CHAR_LIMIT) { openModal('limit-reached'); return; }
-
-  // If we already have audio from last speak, reuse it
-  if (audioBlobUrl) {
-    triggerDownload(audioBlobUrl);
-    return;
-  }
-
-  // Otherwise fetch fresh
-  setLoadingState(true);
-
-  try {
-    const res = await fetch(CONFIG.API_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: rawText, voice_id: voiceSelect.value }),
-    });
-
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-    const blob = await res.blob();
-    audioBlobUrl = URL.createObjectURL(blob);
-    setLoadingState(false);
-    triggerDownload(audioBlobUrl);
-
-  } catch (err) {
-    setLoadingState(false);
-    showError('İndirme başarısız. Lütfen tekrar deneyin.');
-    console.error('[Download Error]', err);
-  }
-}
-
-function triggerDownload(url) {
+function downloadAudio() {
+  if (!currentBlobUrl) return;
   const a = document.createElement('a');
-  a.href = url;
+  a.href     = currentBlobUrl;
   a.download = 'seslendirme.mp3';
   document.body.appendChild(a);
   a.click();
@@ -241,26 +257,39 @@ function triggerDownload(url) {
 }
 
 // ── UI STATE HELPERS ──────────────────────────────
-function setLoadingState(loading) {
+function setLoadingState(loading, msg = 'Hazırlanıyor…') {
   playBtn.disabled = loading;
-  downloadBtn.disabled = loading;
+  stopBtn.disabled = !loading;
+
   if (loading) {
-    playBtn.innerHTML = '<span class="btn__icon">⏳</span> Hazırlanıyor…';
+    playBtn.innerHTML = `<span class="btn__icon">⏳</span> ${msg}`;
+    playingBarText.textContent = msg;
+    playingBar.classList.add('active');
+    playingBar.style.borderColor = '';
+    playingBar.style.background  = '';
+    const waveEl = playingBar.querySelector('.playing-bar__waves');
+    if (waveEl) waveEl.style.display = '';
   } else {
     playBtn.innerHTML = '<span class="btn__icon">▶</span> Seslendir';
+    stopBtn.disabled  = true;
+    // audioEl.src always resolves to an absolute URL in browsers so !audioEl.src is never true.
+    // Use currentBlobUrl to check whether audio is actually loaded.
+    if (!currentBlobUrl || audioEl.paused) {
+      playingBar.classList.remove('active');
+    }
   }
 }
 
 function setPlayingState(playing) {
-  isPlaying = playing;
   if (playing) {
-    playBtn.disabled = true;
-    stopBtn.disabled = false;
+    stopBtn.disabled  = false;
+    playBtn.disabled  = true;
     playingBar.classList.add('active');
+    playingBarText.textContent = 'Oynatılıyor…';
     playBtn.innerHTML = '<span class="btn__icon">⏸</span> Oynatılıyor…';
   } else {
-    playBtn.disabled = false;
-    stopBtn.disabled = true;
+    stopBtn.disabled  = true;
+    playBtn.disabled  = false;
     playingBar.classList.remove('active');
     playBtn.innerHTML = '<span class="btn__icon">▶</span> Seslendir';
   }
@@ -273,40 +302,44 @@ function flashTextarea() {
 }
 
 function showError(msg) {
-  // Reuse playing bar for transient error message
-  const bar = playingBar;
-  const textEl = bar.querySelector('.playing-bar__text');
-  const waveEl = bar.querySelector('.playing-bar__waves');
-  if (textEl) textEl.textContent = '⚠ ' + msg;
+  const waveEl = playingBar.querySelector('.playing-bar__waves');
   if (waveEl) waveEl.style.display = 'none';
-  bar.classList.add('active');
-  bar.style.borderColor = 'var(--danger)';
-  bar.style.background = 'rgba(255,71,87,0.08)';
+  playingBarText.textContent    = '⚠ ' + msg;
+  playingBar.style.borderColor  = 'var(--danger)';
+  playingBar.style.background   = 'rgba(255,71,87,0.08)';
+  playingBar.classList.add('active');
+  stopBtn.disabled  = true;
+  playBtn.disabled  = false;
+
   setTimeout(() => {
-    bar.classList.remove('active');
-    bar.style.borderColor = '';
-    bar.style.background = '';
-    if (textEl) textEl.textContent = 'Seslendiriliyor…';
+    playingBar.classList.remove('active');
+    playingBar.style.borderColor = '';
+    playingBar.style.background  = '';
+    playingBarText.textContent   = 'Seslendiriliyor…';
     if (waveEl) waveEl.style.display = '';
-  }, 4000);
+  }, 5000);
 }
 
-// ── SPEED SLIDER ──────────────────────────────────
-speedSlider.addEventListener('input', () => {
-  const rate = parseFloat(speedSlider.value).toFixed(1);
-  speedVal.textContent = rate + 'x';
-  if (audioEl) audioEl.playbackRate = parseFloat(rate);
+// ── AUDIO ELEMENT EVENTS ──────────────────────────
+audioEl.addEventListener('play',  () => setPlayingState(true));
+audioEl.addEventListener('ended', () => setPlayingState(false));
+audioEl.addEventListener('pause', () => setPlayingState(false));
+audioEl.addEventListener('error', () => {
+  // Guard: ignore spurious errors fired when clearing src via removeAttribute+load()
+  if (!currentBlobUrl) return;
+  setPlayingState(false);
+  showError('Ses oynatılamadı. Lütfen tekrar deneyin.');
 });
 
 // ── BUTTON EVENTS ─────────────────────────────────
-playBtn.addEventListener('click', speak);
-stopBtn.addEventListener('click', stopAudio);
+playBtn.addEventListener('click',     speak);
+stopBtn.addEventListener('click',     stopAll);
 downloadBtn.addEventListener('click', downloadAudio);
-clearBtn.addEventListener('click', () => {
-  stopAudio();
+clearBtn.addEventListener('click',    () => {
+  stopAll();
+  resetAudio();
   textarea.value = '';
   updateCharCount();
-  if (audioBlobUrl) { URL.revokeObjectURL(audioBlobUrl); audioBlobUrl = null; }
   textarea.focus();
 });
 
@@ -314,34 +347,16 @@ clearBtn.addEventListener('click', () => {
 textarea.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
     e.preventDefault();
-    if (!isPlaying) speak();
+    if (!isProcessing) speak();
   }
-});
-
-// ── PASTE DETECTION ───────────────────────────────
-textarea.addEventListener('paste', () => {
-  setTimeout(updateCharCount, 50);
 });
 
 // ── MODAL ─────────────────────────────────────────
 const MODAL_CONTENT = {
-  'premium-voice': {
-    label: 'Premium Ses Seçimi',
-    title: '130\'dan Fazla Gerçekçi İnsan Sesi',
-    desc: 'Bu araçta sınırlı sayıda Fish Audio sesi sunulmaktadır. Yankı platformunda 130+ premium AI ses, 20+ dil ve duygu analizi (fısıltı, heyecan, coşku) mevcuttur.',
-    features: [
-      '130+ premium gerçekçi insan sesi',
-      '20+ dil desteği (Türkçe, İngilizce, Almanca…)',
-      'Duygu analizi — fısıltı, heyecan, coşku',
-      'Yüksek kaliteli MP3 / WAV indirme',
-      'Sınırsız karakter, API erişimi',
-    ],
-    campaign: 'premium-voice',
-  },
   'limit-reached': {
-    label: 'Ücretsiz Limit Aşıldı',
-    title: 'Metin 500 Karakteri Aştı',
-    desc: 'Bu araç ücretsiz olarak 500 karaktere kadar seslendirir. Uzun metinler için Yankı\'yı deneyin — ilk 1.000 kredi hediye.',
+    label:    'Ücretsiz Limit Aşıldı',
+    title:    `Metin ${CONFIG.FREE_CHAR_LIMIT} Karakteri Aştı`,
+    desc:     `Bu araç ücretsiz olarak ${CONFIG.FREE_CHAR_LIMIT} karaktere kadar seslendirir. Uzun metinler için Yankı'yı deneyin — ilk 1.000 kredi hediye.`,
     features: [
       'Sınırsız uzunlukta metin seslendirme',
       '1.000 ücretsiz kredi başlangıç hediyesi',
@@ -355,10 +370,10 @@ const MODAL_CONTENT = {
 
 function openModal(type) {
   const content = MODAL_CONTENT[type] || MODAL_CONTENT['limit-reached'];
-  document.getElementById('modal-label').textContent = content.label;
-  document.getElementById('modal-title').textContent = content.title;
-  document.getElementById('modal-desc').textContent  = content.desc;
-  document.getElementById('modal-features').innerHTML = content.features
+  document.getElementById('modal-label').textContent    = content.label;
+  document.getElementById('modal-title').textContent    = content.title;
+  document.getElementById('modal-desc').textContent     = content.desc;
+  document.getElementById('modal-features').innerHTML   = content.features
     .map(f => `<div class="modal__feature">${f}</div>`).join('');
   document.getElementById('modal-cta').onclick = () => {
     window.open(buildUTMUrl(content.campaign), '_blank', 'noopener noreferrer');
@@ -380,10 +395,11 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal
 // ── FAQ ACCORDION ─────────────────────────────────
 document.querySelectorAll('.faq-item__q').forEach(btn => {
   btn.addEventListener('click', () => {
-    const item = btn.closest('.faq-item');
+    const item   = btn.closest('.faq-item');
     const isOpen = item.classList.contains('open');
     document.querySelectorAll('.faq-item').forEach(i => i.classList.remove('open'));
     if (!isOpen) item.classList.add('open');
+    btn.setAttribute('aria-expanded', String(!isOpen));
   });
 });
 
@@ -396,10 +412,12 @@ document.querySelectorAll('[data-cta]').forEach(btn => {
 
 // ── INIT ──────────────────────────────────────────
 updateCharCount();
-stopBtn.disabled = true;
+stopBtn.disabled    = true;
+downloadBtn.disabled = true;
 charMax.textContent = CONFIG.FREE_CHAR_LIMIT;
 
 // Cleanup on unload
 window.addEventListener('beforeunload', () => {
-  if (audioBlobUrl) URL.revokeObjectURL(audioBlobUrl);
+  abortPoll();
+  if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
 });
